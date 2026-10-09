@@ -5,11 +5,11 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
 <meta name="apple-mobile-web-app-capable" content="yes" />
 <meta name="apple-mobile-web-app-title" content="Attendance" />
-<title>Attendance & Dismissal</title>
+<title>Attendance</title>
 <style>
-  html, body { margin: 0; padding: 0; background: #EEF2EA; }
+  html, body { margin: 0; padding: 0; background: #F4F5F8; }
   #root { min-height: 100vh; }
-  #boot { font-family: system-ui, sans-serif; color: #5E6B62; padding: 40px; text-align: center; }
+  #boot { font-family: system-ui, sans-serif; color: #6B7280; padding: 40px; text-align: center; }
 </style>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
@@ -30,13 +30,13 @@ const store = {
 };
 
 /* ------------------------------------------------------------------ */
-/*  Tokens                                                             */
+/*  Tokens — "Slate & Amber" theme                                     */
 /* ------------------------------------------------------------------ */
 const C = {
-  bg: "#EEF2EA", surface: "#FFFFFF", pine: "#1F4D3A", pineDark: "#16382A",
-  ink: "#1A241F", muted: "#5E6B62", line: "#DCE4D8", lineSoft: "#E8EDE4",
-  marigold: "#E29A2C", marigoldSoft: "#FBEBCF", red: "#C0492F", redSoft: "#F6E2DC",
-  green: "#2E7D52", greenSoft: "#DCEFE3",
+  bg: "#F4F5F8", surface: "#FFFFFF", pine: "#2A3A66", pineDark: "#1E2B4D",
+  ink: "#1C2233", muted: "#6B7280", line: "#E2E5ED", lineSoft: "#EDEFF4",
+  marigold: "#E8913A", marigoldSoft: "#FBEBD6", red: "#D1495B", redSoft: "#F9E3E6",
+  green: "#17876B", greenSoft: "#D6EFE7",
 };
 const DISPLAY = '"Bricolage Grotesque", "IBM Plex Sans", system-ui, sans-serif';
 const BODY = '"IBM Plex Sans", system-ui, -apple-system, sans-serif';
@@ -58,16 +58,22 @@ function App() {
   const [date, setDate] = useState(todayISO());
   const [q, setQ] = useState("");
   const [dismiss, setDismiss] = useState(null); // child being dismissed
+  const [settings, setSettings] = useState({ orgName: "", logo: "" });
+  const [showSettings, setShowSettings] = useState(false);
 
   useEffect(() => {
     (async () => {
       const c = await store.get("children");
       const a = await store.get("attendance");
+      const s = await store.get("settings");
       if (c) { try { setChildren(JSON.parse(c)); } catch (e) {} }
       if (a) { try { setAttendance(JSON.parse(a)); } catch (e) {} }
+      if (s) { try { setSettings((p) => ({ ...p, ...JSON.parse(s) })); } catch (e) {} }
       setLoading(false);
     })();
   }, []);
+
+  const saveSettings = useCallback((next) => { setSettings(next); store.set("settings", JSON.stringify(next)); }, []);
 
   useEffect(() => {
     const id = "att-fonts";
@@ -113,9 +119,20 @@ function App() {
     <div style={page}>
       <style>{globalCSS}</style>
 
-      <header style={{ padding: "20px 18px 12px" }}>
-        <div style={eyebrow}>Attendance &amp; safe dismissal</div>
-        <h1 style={{ fontFamily: DISPLAY, fontWeight: 800, fontSize: 22, color: C.ink, margin: "2px 0 0" }}>From the Ground Up</h1>
+      <header style={{ padding: "18px 18px 12px" }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+          <Logo src={settings.logo} />
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{ display: "flex", alignItems: "baseline", gap: 8, flexWrap: "wrap" }}>
+              <h1 style={{ fontFamily: DISPLAY, fontWeight: 800, fontSize: 22, color: C.ink, margin: 0, letterSpacing: "-0.3px" }}>Attendance</h1>
+              <span style={{ fontFamily: MONO, fontSize: 10, letterSpacing: 1.5, color: C.marigold, textTransform: "uppercase", fontWeight: 600 }}>&amp; safe dismissal</span>
+            </div>
+            <div style={{ fontFamily: BODY, fontSize: 13, color: settings.orgName ? C.muted : "#A8AEBD", marginTop: 1, fontWeight: settings.orgName ? 600 : 400, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+              {settings.orgName || "Set your organization name →"}
+            </div>
+          </div>
+          <button onClick={() => setShowSettings(true)} style={{ ...iconBtn, fontSize: 18, color: C.muted }} title="Settings" aria-label="Settings">⚙</button>
+        </div>
       </header>
 
       <nav style={tabBar}>
@@ -170,6 +187,77 @@ function App() {
         <DismissModal child={dismiss} onClose={() => setDismiss(null)}
           onConfirm={(releasedTo) => { setRec(dismiss.id, { out: true, outTime: nowTime(), releasedTo }); setDismiss(null); }} />
       )}
+
+      {showSettings && (
+        <SettingsModal settings={settings} onSave={saveSettings} onClose={() => setShowSettings(false)} />
+      )}
+    </div>
+  );
+}
+
+/* ================================================================== */
+/*  Logo — placeholder tile, swappable for a real logo later          */
+/* ================================================================== */
+function Logo({ src }) {
+  if (src) {
+    return <img src={src} alt="Organization logo" style={{ width: 42, height: 42, borderRadius: 11, objectFit: "cover", flexShrink: 0, border: `1px solid ${C.line}` }} />;
+  }
+  return (
+    <div aria-hidden="true" style={{ width: 42, height: 42, borderRadius: 11, flexShrink: 0,
+      background: `linear-gradient(145deg, ${C.pine}, ${C.pineDark})`,
+      display: "flex", alignItems: "center", justifyContent: "center",
+      boxShadow: "0 1px 2px rgba(28,34,51,.18)" }}>
+      <span style={{ fontFamily: DISPLAY, fontWeight: 800, fontSize: 20, color: "#fff", lineHeight: 1 }}>A</span>
+    </div>
+  );
+}
+
+/* ================================================================== */
+/*  Settings modal — org name + logo (the per-org slot)               */
+/* ================================================================== */
+function SettingsModal({ settings, onSave, onClose }) {
+  const [orgName, setOrgName] = useState(settings.orgName || "");
+  const [logo, setLogo] = useState(settings.logo || "");
+
+  const onPickLogo = (e) => {
+    const file = e.target.files && e.target.files[0];
+    if (!file) return;
+    if (!/^image\//.test(file.type)) { alert("Please choose an image file."); return; }
+    if (file.size > 500 * 1024) { alert("Please choose a smaller image (under 500 KB)."); return; }
+    const reader = new FileReader();
+    reader.onload = () => setLogo(reader.result);
+    reader.readAsDataURL(file);
+  };
+
+  const save = () => { onSave({ ...settings, orgName: orgName.trim(), logo }); onClose(); };
+
+  return (
+    <div style={overlay} onClick={onClose}>
+      <div style={modalCard} onClick={(e) => e.stopPropagation()}>
+        <div style={{ fontFamily: MONO, fontSize: 10, letterSpacing: 1.5, color: C.muted, textTransform: "uppercase" }}>Settings</div>
+        <div style={{ fontFamily: DISPLAY, fontWeight: 800, fontSize: 21, color: C.ink, margin: "2px 0 16px" }}>Organization</div>
+
+        <div style={{ display: "flex", alignItems: "center", gap: 14, marginBottom: 16 }}>
+          <Logo src={logo} />
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+            <label style={{ ...btnGhost, cursor: "pointer", display: "inline-block" }}>
+              {logo ? "Change logo" : "Upload logo"}
+              <input type="file" accept="image/*" onChange={onPickLogo} style={{ display: "none" }} />
+            </label>
+            {logo && <button onClick={() => setLogo("")} style={{ ...btnGhost, color: C.red, borderColor: C.redSoft }}>Remove</button>}
+          </div>
+        </div>
+
+        <label style={{ display: "flex", flexDirection: "column", gap: 5, marginBottom: 18 }}>
+          <span style={{ fontFamily: MONO, fontSize: 10, letterSpacing: 1, color: C.muted, textTransform: "uppercase" }}>Organization / program name</span>
+          <input value={orgName} onChange={(e) => setOrgName(e.target.value)} placeholder="e.g. From the Ground Up" style={input} autoFocus />
+        </label>
+
+        <div style={{ display: "flex", gap: 10 }}>
+          <button onClick={save} style={{ ...btnPrimary, flex: 1 }}>Save</button>
+          <button onClick={onClose} style={btnGhost}>Cancel</button>
+        </div>
+      </div>
     </div>
   );
 }
@@ -183,7 +271,7 @@ function TodayRow({ child, rec, first, onIn, onUndoIn, onDismiss, onUndoOut }) {
   const state = rec.out ? "out" : rec.in ? "in" : "none";
 
   return (
-    <div style={{ borderTop: first ? "none" : `1px solid ${C.lineSoft}`, background: state === "out" ? "#FBFCFA" : C.surface }}>
+    <div style={{ borderTop: first ? "none" : `1px solid ${C.lineSoft}`, background: state === "out" ? "#FBFCFE" : C.surface }}>
       <div style={{ display: "flex", alignItems: "center", gap: 11, padding: "11px 14px" }}>
         <div style={{ flex: 1, minWidth: 0 }} onClick={() => setOpen((v) => !v)}>
           <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
@@ -211,7 +299,7 @@ function TodayRow({ child, rec, first, onIn, onUndoIn, onDismiss, onUndoOut }) {
       </div>
 
       {open && (
-        <div style={{ padding: "0 14px 12px 14px", background: "#FBFCFA" }}>
+        <div style={{ padding: "0 14px 12px 14px", background: "#FBFCFE" }}>
           <div style={{ background: C.surface, border: `1px solid ${C.line}`, borderRadius: 10, padding: 12 }}>
             <div style={{ fontFamily: MONO, fontSize: 10, letterSpacing: 1, color: C.muted, textTransform: "uppercase", marginBottom: 4 }}>Authorized pickup (besides parent/guardian)</div>
             <div style={{ fontFamily: BODY, fontSize: 14, color: C.ink }}>{child.pickups?.trim() ? child.pickups : "— none listed —"}</div>
@@ -379,12 +467,12 @@ const input = { fontFamily: BODY, fontSize: 14, color: C.ink, background: C.surf
 const btnPrimary = { fontFamily: BODY, fontWeight: 700, fontSize: 14, color: "#fff", background: C.pine, border: "none", borderRadius: 9, padding: "9px 15px", cursor: "pointer", whiteSpace: "nowrap" };
 const btnGhost = { fontFamily: BODY, fontWeight: 600, fontSize: 14, color: C.pine, background: C.surface, border: `1.5px solid ${C.line}`, borderRadius: 9, padding: "8px 14px", cursor: "pointer", whiteSpace: "nowrap" };
 const iconBtn = { background: "none", border: "none", cursor: "pointer", fontSize: 15, padding: 6, borderRadius: 7, color: C.pine, lineHeight: 1 };
-const overlay = { position: "fixed", inset: 0, background: "rgba(20,30,25,.55)", display: "flex", alignItems: "center", justifyContent: "center", padding: 18, zIndex: 50 };
+const overlay = { position: "fixed", inset: 0, background: "rgba(20,25,40,.55)", display: "flex", alignItems: "center", justifyContent: "center", padding: 18, zIndex: 50 };
 const modalCard = { background: C.surface, borderRadius: 16, padding: 22, maxWidth: 420, width: "100%", maxHeight: "88vh", overflowY: "auto" };
 
 const globalCSS = `
   * { -webkit-font-smoothing: antialiased; }
-  input:focus, textarea:focus { border-color: ${C.pine} !important; box-shadow: 0 0 0 3px rgba(31,77,58,.12); }
+  input:focus, textarea:focus { border-color: ${C.pine} !important; box-shadow: 0 0 0 3px rgba(42,58,102,.14); }
   button:focus-visible { outline: 2px solid ${C.pine}; outline-offset: 2px; }
 `;
 
