@@ -1,0 +1,375 @@
+import React, { useState, useEffect, useCallback } from "react";
+
+/* ------------------------------------------------------------------ */
+/*  Storage                                                            */
+/* ------------------------------------------------------------------ */
+const hasStore = typeof window !== "undefined" && window.storage;
+const mem = {};
+const store = {
+  async get(key) {
+    if (hasStore) { try { const r = await window.storage.get(key); return r ? r.value : null; } catch (e) { return null; } }
+    return key in mem ? mem[key] : null;
+  },
+  async set(key, value) {
+    if (hasStore) { try { await window.storage.set(key, value); } catch (e) {} } else { mem[key] = value; }
+  },
+};
+
+/* ------------------------------------------------------------------ */
+/*  Tokens                                                             */
+/* ------------------------------------------------------------------ */
+const C = {
+  bg: "#EEF2EA", surface: "#FFFFFF", pine: "#1F4D3A", pineDark: "#16382A",
+  ink: "#1A241F", muted: "#5E6B62", line: "#DCE4D8", lineSoft: "#E8EDE4",
+  marigold: "#E29A2C", marigoldSoft: "#FBEBCF", red: "#C0492F", redSoft: "#F6E2DC",
+  green: "#2E7D52", greenSoft: "#DCEFE3",
+};
+const DISPLAY = '"Bricolage Grotesque", "IBM Plex Sans", system-ui, sans-serif';
+const BODY = '"IBM Plex Sans", system-ui, -apple-system, sans-serif';
+const MONO = '"IBM Plex Mono", ui-monospace, Menlo, monospace';
+
+const uid = () => Math.random().toString(36).slice(2, 9);
+const todayISO = () => new Date().toISOString().slice(0, 10);
+const nowTime = () => new Date().toLocaleTimeString("en-CA", { hour: "numeric", minute: "2-digit" });
+const prettyDate = (iso) => iso ? new Date(iso + "T00:00:00").toLocaleDateString("en-CA", { weekday: "short", day: "numeric", month: "short" }) : "";
+
+/* ================================================================== */
+/*  App                                                                */
+/* ================================================================== */
+export default function App() {
+  const [loading, setLoading] = useState(true);
+  const [tab, setTab] = useState("today");
+  const [children, setChildren] = useState([]);
+  const [attendance, setAttendance] = useState({}); // { date: { childId: {in,out,outTime,releasedTo} } }
+  const [date, setDate] = useState(todayISO());
+  const [q, setQ] = useState("");
+  const [dismiss, setDismiss] = useState(null); // child being dismissed
+
+  useEffect(() => {
+    (async () => {
+      const c = await store.get("children");
+      const a = await store.get("attendance");
+      if (c) { try { setChildren(JSON.parse(c)); } catch (e) {} }
+      if (a) { try { setAttendance(JSON.parse(a)); } catch (e) {} }
+      setLoading(false);
+    })();
+  }, []);
+
+  useEffect(() => {
+    const id = "att-fonts";
+    if (!document.getElementById(id)) {
+      const l = document.createElement("link"); l.id = id; l.rel = "stylesheet";
+      l.href = "https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:wght@600;700;800&family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap";
+      document.head.appendChild(l);
+    }
+  }, []);
+
+  const saveChildren = useCallback((next) => { setChildren(next); store.set("children", JSON.stringify(next)); }, []);
+  const saveAtt = useCallback((next) => { setAttendance(next); store.set("attendance", JSON.stringify(next)); }, []);
+
+  const rec = (childId) => (attendance[date] && attendance[date][childId]) || {};
+  const setRec = (childId, patch) => {
+    const day = { ...(attendance[date] || {}) };
+    day[childId] = { ...(day[childId] || {}), ...patch };
+    saveAtt({ ...attendance, [date]: day });
+  };
+
+  const exportDay = () => {
+    const day = attendance[date] || {};
+    const head = ["Date", "Child", "Checked in", "In time", "Released", "Out time", "Released to", "May leave alone", "Authorized pickup"];
+    const rows = [head];
+    children.forEach((c) => {
+      const r = day[c.id] || {};
+      rows.push([date, c.name, r.in ? "Yes" : "No", r.inTime || "", r.out ? "Yes" : "No", r.outTime || "", r.releasedTo || "", c.solo ? "Yes" : "No", c.pickups || ""]);
+    });
+    const csv = rows.map((row) => row.map((x) => `"${String(x ?? "").replace(/"/g, '""')}"`).join(",")).join("\r\n");
+    const blob = new Blob(["\ufeff" + csv], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a"); a.href = url; a.download = "attendance_" + date + ".csv"; a.click(); URL.revokeObjectURL(url);
+  };
+
+  if (loading) return <div style={{ ...page, display: "flex", alignItems: "center", justifyContent: "center", minHeight: 300 }}><span style={{ fontFamily: BODY, color: C.muted }}>Loading…</span></div>;
+
+  const dayRecs = attendance[date] || {};
+  const presentIds = children.filter((c) => dayRecs[c.id]?.in).map((c) => c.id);
+  const stillHere = children.filter((c) => dayRecs[c.id]?.in && !dayRecs[c.id]?.out).length;
+  const released = children.filter((c) => dayRecs[c.id]?.out).length;
+
+  return (
+    <div style={page}>
+      <style>{globalCSS}</style>
+
+      <header style={{ padding: "20px 18px 12px" }}>
+        <div style={eyebrow}>Attendance &amp; safe dismissal</div>
+        <h1 style={{ fontFamily: DISPLAY, fontWeight: 800, fontSize: 22, color: C.ink, margin: "2px 0 0" }}>From the Ground Up</h1>
+      </header>
+
+      <nav style={tabBar}>
+        {[["today", "Today"], ["roster", "Children"]].map(([k, label]) => (
+          <button key={k} onClick={() => setTab(k)} style={{ ...tabBtn, color: tab === k ? C.pine : C.muted, borderBottom: tab === k ? `2px solid ${C.pine}` : "2px solid transparent", fontWeight: tab === k ? 700 : 500 }}>{label}{k === "roster" ? ` (${children.length})` : ""}</button>
+        ))}
+      </nav>
+
+      <main style={{ padding: "0 18px 30px" }}>
+        {tab === "today" && (
+          <>
+            <div style={{ ...card, marginBottom: 12, display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 10 }}>
+              <label style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                <span style={{ fontFamily: MONO, fontSize: 10, letterSpacing: 1, color: C.muted, textTransform: "uppercase" }}>Session date</span>
+                <input type="date" value={date} onChange={(e) => setDate(e.target.value)} style={{ ...input, width: 160 }} />
+              </label>
+              <div style={{ display: "flex", gap: 18 }}>
+                <Count label="Checked in" value={presentIds.length} />
+                <Count label="Still here" value={stillHere} color={stillHere ? C.marigold : C.muted} />
+                <Count label="Released" value={released} color={C.green} />
+              </div>
+            </div>
+
+            {children.length === 0 ? (
+              <EmptyRoster onGo={() => setTab("roster")} />
+            ) : (
+              <>
+                <div style={{ display: "flex", gap: 8, marginBottom: 10, alignItems: "center" }}>
+                  <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search a child's name…" style={{ ...input, flex: 1, marginBottom: 0 }} />
+                  <button onClick={exportDay} style={btnGhost} title="Export this day's attendance as CSV">↓ CSV</button>
+                </div>
+                <div style={{ ...card, padding: 0, overflow: "hidden" }}>
+                  {children.filter((c) => c.name.toLowerCase().includes(q.toLowerCase())).map((c, i) => (
+                    <TodayRow key={c.id} child={c} rec={rec(c.id)} first={i === 0}
+                      onIn={() => setRec(c.id, { in: true, inTime: nowTime() })}
+                      onUndoIn={() => setRec(c.id, { in: false, out: false, outTime: "", releasedTo: "" })}
+                      onDismiss={() => setDismiss(c)}
+                      onUndoOut={() => setRec(c.id, { out: false, outTime: "", releasedTo: "" })} />
+                  ))}
+                </div>
+              </>
+            )}
+          </>
+        )}
+
+        {tab === "roster" && (
+          <Roster children={children} saveChildren={saveChildren} />
+        )}
+      </main>
+
+      {dismiss && (
+        <DismissModal child={dismiss} onClose={() => setDismiss(null)}
+          onConfirm={(releasedTo) => { setRec(dismiss.id, { out: true, outTime: nowTime(), releasedTo }); setDismiss(null); }} />
+      )}
+    </div>
+  );
+}
+
+/* ================================================================== */
+/*  Today row                                                          */
+/* ================================================================== */
+function TodayRow({ child, rec, first, onIn, onUndoIn, onDismiss, onUndoOut }) {
+  const [open, setOpen] = useState(false);
+  const solo = child.solo;
+  const state = rec.out ? "out" : rec.in ? "in" : "none";
+
+  return (
+    <div style={{ borderTop: first ? "none" : `1px solid ${C.lineSoft}`, background: state === "out" ? "#FBFCFA" : C.surface }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 11, padding: "11px 14px" }}>
+        <div style={{ flex: 1, minWidth: 0 }} onClick={() => setOpen((v) => !v)}>
+          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            <span style={{ fontFamily: BODY, fontWeight: 600, fontSize: 15, color: C.ink }}>{child.name}</span>
+            <span style={{ fontFamily: BODY, fontSize: 10.5, fontWeight: 700, padding: "1px 7px", borderRadius: 5,
+              color: solo ? C.green : C.red, background: solo ? C.greenSoft : C.redSoft }}>
+              {solo ? "MAY LEAVE ALONE" : "PICKUP ONLY"}
+            </span>
+          </div>
+          <div style={{ fontFamily: BODY, fontSize: 11.5, color: C.muted, marginTop: 2 }}>
+            {state === "out" ? `Released ${rec.outTime}${rec.releasedTo ? " → " + rec.releasedTo : ""}`
+              : state === "in" ? `Checked in ${rec.inTime || ""} · tap for pickup info`
+              : "Tap name for pickup info"}
+          </div>
+        </div>
+
+        {state === "none" && <button onClick={onIn} style={btnGhost}>Check in</button>}
+        {state === "in" && (
+          <div style={{ display: "flex", gap: 6 }}>
+            <button onClick={onUndoIn} style={iconBtn} title="Undo check-in">↩</button>
+            <button onClick={onDismiss} style={btnPrimary}>Dismiss</button>
+          </div>
+        )}
+        {state === "out" && <button onClick={onUndoOut} style={{ ...iconBtn, color: C.muted }} title="Undo release">↩ undo</button>}
+      </div>
+
+      {open && (
+        <div style={{ padding: "0 14px 12px 14px", background: "#FBFCFA" }}>
+          <div style={{ background: C.surface, border: `1px solid ${C.line}`, borderRadius: 10, padding: 12 }}>
+            <div style={{ fontFamily: MONO, fontSize: 10, letterSpacing: 1, color: C.muted, textTransform: "uppercase", marginBottom: 4 }}>Authorized pickup (besides parent/guardian)</div>
+            <div style={{ fontFamily: BODY, fontSize: 14, color: C.ink }}>{child.pickups?.trim() ? child.pickups : "— none listed —"}</div>
+            <div style={{ marginTop: 8, fontFamily: BODY, fontSize: 13, fontWeight: 600, color: solo ? C.green : C.red }}>
+              {solo ? "✓ Permitted to leave the program unaccompanied" : "✗ Not permitted to leave alone — hand off to an authorized adult"}
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ================================================================== */
+/*  Dismiss modal — the safety checkpoint                              */
+/* ================================================================== */
+function DismissModal({ child, onClose, onConfirm }) {
+  const solo = child.solo;
+  const [releasedTo, setReleasedTo] = useState("");
+  return (
+    <div style={overlay} onClick={onClose}>
+      <div style={modalCard} onClick={(e) => e.stopPropagation()}>
+        <div style={{ fontFamily: MONO, fontSize: 10, letterSpacing: 1.5, color: C.muted, textTransform: "uppercase" }}>Dismissing</div>
+        <div style={{ fontFamily: DISPLAY, fontWeight: 800, fontSize: 22, color: C.ink, margin: "2px 0 14px" }}>{child.name}</div>
+
+        <div style={{ borderRadius: 12, padding: 14, marginBottom: 14,
+          background: solo ? C.greenSoft : C.redSoft, border: `1.5px solid ${solo ? C.green : C.red}` }}>
+          <div style={{ fontFamily: DISPLAY, fontWeight: 700, fontSize: 16, color: solo ? C.green : C.red }}>
+            {solo ? "✓ May leave on their own" : "⚠ Must be released to an authorized adult"}
+          </div>
+        </div>
+
+        <div style={{ fontFamily: MONO, fontSize: 10, letterSpacing: 1, color: C.muted, textTransform: "uppercase", marginBottom: 4 }}>Authorized pickup (besides parent/guardian)</div>
+        <div style={{ fontFamily: BODY, fontSize: 15, color: C.ink, marginBottom: 14, lineHeight: 1.4 }}>
+          {child.pickups?.trim() ? child.pickups : "— none listed besides parent/guardian —"}
+        </div>
+
+        {!solo && (
+          <label style={{ display: "flex", flexDirection: "column", gap: 5, marginBottom: 14 }}>
+            <span style={{ fontFamily: MONO, fontSize: 10, letterSpacing: 1, color: C.muted, textTransform: "uppercase" }}>Released to (optional)</span>
+            <input value={releasedTo} onChange={(e) => setReleasedTo(e.target.value)} placeholder="Who collected the child?" style={input} autoFocus />
+          </label>
+        )}
+
+        <div style={{ display: "flex", gap: 10 }}>
+          <button onClick={() => onConfirm(releasedTo.trim())} style={{ ...btnPrimary, flex: 1, background: solo ? C.pine : C.red }}>
+            {solo ? "Confirm dismissed" : "Confirm hand-off"}
+          </button>
+          <button onClick={onClose} style={btnGhost}>Cancel</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ================================================================== */
+/*  Roster tab (import + manage)                                       */
+/* ================================================================== */
+function Roster({ children, saveChildren }) {
+  const [paste, setPaste] = useState("");
+  const [showImport, setShowImport] = useState(children.length === 0);
+  const [nm, setNm] = useState(""); const [pk, setPk] = useState(""); const [so, setSo] = useState(false);
+
+  const parseSolo = (s) => /^\s*(y|yes|true|1)/i.test(s || "");
+  const doImport = () => {
+    const existing = new Set(children.map((c) => c.name.trim().toLowerCase()));
+    const added = [];
+    paste.split(/\r?\n/).forEach((raw) => {
+      if (!raw.trim()) return;
+      const cols = raw.split("\t").map((x) => x.trim());
+      const name = cols[0];
+      if (!name || /child\s*name/i.test(name)) return; // skip header
+      if (existing.has(name.toLowerCase())) return;    // skip dupes
+      existing.add(name.toLowerCase());
+      added.push({ id: uid(), name, pickups: cols[1] || "", solo: parseSolo(cols[2]) });
+    });
+    if (added.length) saveChildren([...children, ...added]);
+    setPaste(""); setShowImport(false);
+  };
+
+  const addOne = () => { if (!nm.trim()) return; saveChildren([...children, { id: uid(), name: nm.trim(), pickups: pk.trim(), solo: so }]); setNm(""); setPk(""); setSo(false); };
+  const update = (id, patch) => saveChildren(children.map((c) => (c.id === id ? { ...c, ...patch } : c)));
+  const remove = (id) => { if (confirm("Remove this child from the roster?")) saveChildren(children.filter((c) => c.id !== id)); };
+
+  return (
+    <div>
+      <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
+        <button onClick={() => setShowImport((v) => !v)} style={showImport ? btnPrimary : btnGhost}>Paste from sheet</button>
+      </div>
+
+      {showImport && (
+        <div style={{ ...card, marginBottom: 14, borderColor: C.marigold }}>
+          <div style={{ fontFamily: BODY, fontSize: 13, color: C.muted, marginBottom: 8 }}>
+            In your Google Sheet, select the three columns — <b>Child name</b>, <b>Authorized pickup persons</b>, <b>Permitted to leave unaccompanied</b> — copy, and paste below. One child per row.
+          </div>
+          <textarea value={paste} onChange={(e) => setPaste(e.target.value)} rows={6} placeholder={"Amara Bello\tGrandma Ruth, Uncle Joe\tNo\nDavid Chen\tMrs. Chen (aunt)\tYes"} style={{ ...input, fontFamily: MONO, fontSize: 12.5, resize: "vertical" }} />
+          <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
+            <button onClick={doImport} style={btnPrimary} disabled={!paste.trim()}>Import</button>
+            <span style={{ fontFamily: BODY, fontSize: 12, color: C.muted, alignSelf: "center" }}>Duplicates and header rows are skipped automatically.</span>
+          </div>
+        </div>
+      )}
+
+      {/* quick add one */}
+      <div style={{ ...card, marginBottom: 14 }}>
+        <div style={{ fontFamily: MONO, fontSize: 10, letterSpacing: 1, color: C.muted, textTransform: "uppercase", marginBottom: 8 }}>Add a child</div>
+        <div style={{ display: "grid", gap: 8 }}>
+          <input value={nm} onChange={(e) => setNm(e.target.value)} placeholder="Child name" style={input} />
+          <input value={pk} onChange={(e) => setPk(e.target.value)} placeholder="Authorized pickup persons (besides parent/guardian)" style={input} />
+          <label style={{ display: "flex", alignItems: "center", gap: 8, fontFamily: BODY, fontSize: 14, color: C.ink }}>
+            <input type="checkbox" checked={so} onChange={(e) => setSo(e.target.checked)} style={{ width: 18, height: 18, accentColor: C.pine }} />
+            Permitted to leave the program unaccompanied
+          </label>
+          <button onClick={addOne} style={{ ...btnPrimary, justifySelf: "start" }}>Add</button>
+        </div>
+      </div>
+
+      {/* list */}
+      {children.length === 0 ? (
+        <div style={{ ...card, textAlign: "center", padding: 30, fontFamily: BODY, color: C.muted, fontSize: 14 }}>No children yet — paste your roster above.</div>
+      ) : (
+        <div style={{ ...card, padding: 0, overflow: "hidden" }}>
+          {children.map((c, i) => (
+            <div key={c.id} style={{ padding: "12px 14px", borderTop: i ? `1px solid ${C.lineSoft}` : "none" }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                <input value={c.name} onChange={(e) => update(c.id, { name: e.target.value })} style={{ ...input, fontWeight: 600, flex: 1, border: "1px solid transparent" }} />
+                <button onClick={() => remove(c.id)} style={{ ...iconBtn, color: C.red }}>🗑</button>
+              </div>
+              <input value={c.pickups} onChange={(e) => update(c.id, { pickups: e.target.value })} placeholder="Authorized pickup persons" style={{ ...input, fontSize: 13, marginTop: 6 }} />
+              <label style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 8, fontFamily: BODY, fontSize: 13, color: c.solo ? C.green : C.red, fontWeight: 600 }}>
+                <input type="checkbox" checked={c.solo} onChange={(e) => update(c.id, { solo: e.target.checked })} style={{ width: 17, height: 17, accentColor: C.green }} />
+                {c.solo ? "May leave unaccompanied" : "Pickup only — not permitted to leave alone"}
+              </label>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ================================================================== */
+/*  Bits & styles                                                      */
+/* ================================================================== */
+function Count({ label, value, color }) {
+  return <div style={{ textAlign: "center" }}>
+    <div style={{ fontFamily: MONO, fontSize: 22, fontWeight: 600, color: color || C.ink, lineHeight: 1 }}>{value}</div>
+    <div style={{ fontFamily: MONO, fontSize: 9, letterSpacing: 1, color: C.muted, textTransform: "uppercase", marginTop: 3 }}>{label}</div>
+  </div>;
+}
+function EmptyRoster({ onGo }) {
+  return <div style={{ ...card, textAlign: "center", padding: "40px 20px" }}>
+    <div style={{ fontFamily: DISPLAY, fontWeight: 700, fontSize: 18, color: C.ink }}>No children on the roster yet</div>
+    <p style={{ fontFamily: BODY, color: C.muted, fontSize: 14, margin: "8px 0 16px" }}>Paste your registration list from the Google Sheet to get started.</p>
+    <button onClick={onGo} style={btnPrimary}>Go to Children</button>
+  </div>;
+}
+
+const page = { background: C.bg, minHeight: "100%", color: C.ink, fontFamily: BODY };
+const eyebrow = { fontFamily: MONO, fontSize: 11, letterSpacing: 2, color: C.marigold, textTransform: "uppercase", fontWeight: 600 };
+const tabBar = { display: "flex", gap: 4, padding: "0 18px", borderBottom: `1px solid ${C.line}`, marginBottom: 16 };
+const tabBtn = { background: "none", border: "none", fontFamily: BODY, fontSize: 14, padding: "10px 14px", cursor: "pointer", marginBottom: -1 };
+const card = { background: C.surface, border: `1px solid ${C.line}`, borderRadius: 14, padding: 16 };
+const input = { fontFamily: BODY, fontSize: 14, color: C.ink, background: C.surface, border: `1px solid ${C.line}`, borderRadius: 9, padding: "9px 11px", outline: "none", width: "100%", boxSizing: "border-box" };
+const btnPrimary = { fontFamily: BODY, fontWeight: 700, fontSize: 14, color: "#fff", background: C.pine, border: "none", borderRadius: 9, padding: "9px 15px", cursor: "pointer", whiteSpace: "nowrap" };
+const btnGhost = { fontFamily: BODY, fontWeight: 600, fontSize: 14, color: C.pine, background: C.surface, border: `1.5px solid ${C.line}`, borderRadius: 9, padding: "8px 14px", cursor: "pointer", whiteSpace: "nowrap" };
+const iconBtn = { background: "none", border: "none", cursor: "pointer", fontSize: 15, padding: 6, borderRadius: 7, color: C.pine, lineHeight: 1 };
+const overlay = { position: "fixed", inset: 0, background: "rgba(20,30,25,.55)", display: "flex", alignItems: "center", justifyContent: "center", padding: 18, zIndex: 50 };
+const modalCard = { background: C.surface, borderRadius: 16, padding: 22, maxWidth: 420, width: "100%", maxHeight: "88vh", overflowY: "auto" };
+
+const globalCSS = `
+  * { -webkit-font-smoothing: antialiased; }
+  input:focus, textarea:focus { border-color: ${C.pine} !important; box-shadow: 0 0 0 3px rgba(31,77,58,.12); }
+  button:focus-visible { outline: 2px solid ${C.pine}; outline-offset: 2px; }
+`;
