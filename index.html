@@ -60,20 +60,32 @@ function App() {
   const [dismiss, setDismiss] = useState(null); // child being dismissed
   const [settings, setSettings] = useState({ orgName: "", logo: "" });
   const [showSettings, setShowSettings] = useState(false);
+  const [pool, setPool] = useState([]); // shared pickup people: [{ id, name, rel }]
 
   useEffect(() => {
     (async () => {
       const c = await store.get("children");
       const a = await store.get("attendance");
       const s = await store.get("settings");
+      const p = await store.get("pool");
       if (c) { try { setChildren(JSON.parse(c)); } catch (e) {} }
       if (a) { try { setAttendance(JSON.parse(a)); } catch (e) {} }
-      if (s) { try { setSettings((p) => ({ ...p, ...JSON.parse(s) })); } catch (e) {} }
+      if (s) { try { setSettings((pv) => ({ ...pv, ...JSON.parse(s) })); } catch (e) {} }
+      if (p) { try { setPool(JSON.parse(p)); } catch (e) {} }
       setLoading(false);
     })();
   }, []);
 
   const saveSettings = useCallback((next) => { setSettings(next); store.set("settings", JSON.stringify(next)); }, []);
+  const addToPool = useCallback((name, rel) => {
+    const clean = (name || "").trim(); if (!clean) return;
+    setPool((prev) => {
+      if (prev.some((p) => p.name.toLowerCase() === clean.toLowerCase())) return prev;
+      const next = [...prev, { id: uid(), name: clean, rel: (rel || "").trim() }];
+      store.set("pool", JSON.stringify(next));
+      return next;
+    });
+  }, []);
 
   useEffect(() => {
     const id = "att-fonts";
@@ -96,11 +108,12 @@ function App() {
 
   const exportDay = () => {
     const day = attendance[date] || {};
-    const head = ["Date", "Child", "Checked in", "In time", "Released", "Out time", "Released to", "May leave alone", "Authorized pickup"];
+    const head = ["Date", "Child", "Checked in", "In time", "Released", "Out time", "Released to", "Pickup type", "May leave alone", "Authorized pickup"];
     const rows = [head];
     children.forEach((c) => {
       const r = day[c.id] || {};
-      rows.push([date, c.name, r.in ? "Yes" : "No", r.inTime || "", r.out ? "Yes" : "No", r.outTime || "", r.releasedTo || "", c.solo ? "Yes" : "No", c.pickups || ""]);
+      const pickupType = r.out ? (r.releasedTo ? (r.adHoc ? "Ad-hoc (not on list)" : "Authorized") : "") : "";
+      rows.push([date, c.name, r.in ? "Yes" : "No", r.inTime || "", r.out ? "Yes" : "No", r.outTime || "", r.releasedTo || "", pickupType, c.solo ? "Yes" : "No", c.pickups || ""]);
     });
     const csv = rows.map((row) => row.map((x) => `"${String(x ?? "").replace(/"/g, '""')}"`).join(",")).join("\r\n");
     const blob = new Blob(["\ufeff" + csv], { type: "text/csv;charset=utf-8;" });
@@ -184,8 +197,9 @@ function App() {
       </main>
 
       {dismiss && (
-        <DismissModal child={dismiss} onClose={() => setDismiss(null)}
-          onConfirm={(releasedTo) => { setRec(dismiss.id, { out: true, outTime: nowTime(), releasedTo }); setDismiss(null); }} />
+        <DismissModal child={dismiss} pool={pool} onClose={() => setDismiss(null)}
+          onAddToPool={addToPool}
+          onConfirm={({ releasedTo, adHoc }) => { setRec(dismiss.id, { out: true, outTime: nowTime(), releasedTo, adHoc: !!adHoc }); setDismiss(null); }} />
       )}
 
       {showSettings && (
@@ -281,8 +295,8 @@ function TodayRow({ child, rec, first, onIn, onUndoIn, onDismiss, onUndoOut }) {
               {solo ? "MAY LEAVE ALONE" : "PICKUP ONLY"}
             </span>
           </div>
-          <div style={{ fontFamily: BODY, fontSize: 11.5, color: C.muted, marginTop: 2 }}>
-            {state === "out" ? `Released ${rec.outTime}${rec.releasedTo ? " → " + rec.releasedTo : ""}`
+          <div style={{ fontFamily: BODY, fontSize: 11.5, color: rec.adHoc ? C.marigold : C.muted, marginTop: 2 }}>
+            {state === "out" ? `Released ${rec.outTime}${rec.releasedTo ? " → " + rec.releasedTo : ""}${rec.adHoc ? "  ⚠ not on list" : ""}`
               : state === "in" ? `Checked in ${rec.inTime || ""} · tap for pickup info`
               : "Tap name for pickup info"}
           </div>
@@ -314,38 +328,107 @@ function TodayRow({ child, rec, first, onIn, onUndoIn, onDismiss, onUndoOut }) {
 }
 
 /* ================================================================== */
-/*  Dismiss modal — the safety checkpoint                              */
+/*  Dismiss modal — the safety checkpoint (tap-to-select pickup)       */
 /* ================================================================== */
-function DismissModal({ child, onClose, onConfirm }) {
+function DismissModal({ child, pool, onClose, onConfirm, onAddToPool }) {
   const solo = child.solo;
-  const [releasedTo, setReleasedTo] = useState("");
+  // The child's own authorized people, parsed from their saved "pickups" text (comma / newline separated).
+  const childPeople = (child.pickups || "").split(/[,\n]/).map((s) => s.trim()).filter(Boolean);
+
+  const [selected, setSelected] = useState("");   // name chosen (chip or typed)
+  const [manual, setManual] = useState(false);    // "someone else" text box open
+  const [typed, setTyped] = useState("");
+  const [typedRel, setTypedRel] = useState("");
+  const [savePool, setSavePool] = useState(true); // offer to remember an ad-hoc name
+
+  // Is the chosen name on any authorized list (child's own or the shared pool)?
+  const onList = (name) => {
+    const n = name.trim().toLowerCase();
+    return childPeople.some((p) => p.toLowerCase() === n) || (pool || []).some((p) => p.name.toLowerCase() === n);
+  };
+
+  const chooseChip = (name) => { setSelected(name); setManual(false); setTyped(""); };
+  const finalName = manual ? typed.trim() : selected.trim();
+
+  const confirm = () => {
+    const name = finalName;
+    if (!solo && !name) { return; } // pickup-only must record who collected
+    const isAdHoc = name ? !onList(name) : false;
+    if (manual && name && isAdHoc && savePool) onAddToPool(name, typedRel);
+    onConfirm({ releasedTo: name, adHoc: isAdHoc });
+  };
+
+  // shared-pool chips not already shown in the child's own list
+  const poolExtra = (pool || []).filter((p) => !childPeople.some((cp) => cp.toLowerCase() === p.name.toLowerCase()));
+
+  const Chip = ({ label, active, onClick, tone }) => (
+    <button onClick={onClick} style={{
+      fontFamily: BODY, fontSize: 14, fontWeight: 600, cursor: "pointer",
+      padding: "9px 14px", borderRadius: 10, whiteSpace: "nowrap",
+      border: `1.5px solid ${active ? C.pine : C.line}`,
+      background: active ? C.pine : C.surface,
+      color: active ? "#fff" : (tone === "muted" ? C.muted : C.ink),
+    }}>{label}</button>
+  );
+
   return (
     <div style={overlay} onClick={onClose}>
       <div style={modalCard} onClick={(e) => e.stopPropagation()}>
         <div style={{ fontFamily: MONO, fontSize: 10, letterSpacing: 1.5, color: C.muted, textTransform: "uppercase" }}>Dismissing</div>
         <div style={{ fontFamily: DISPLAY, fontWeight: 800, fontSize: 22, color: C.ink, margin: "2px 0 14px" }}>{child.name}</div>
 
-        <div style={{ borderRadius: 12, padding: 14, marginBottom: 14,
+        <div style={{ borderRadius: 12, padding: 14, marginBottom: 16,
           background: solo ? C.greenSoft : C.redSoft, border: `1.5px solid ${solo ? C.green : C.red}` }}>
           <div style={{ fontFamily: DISPLAY, fontWeight: 700, fontSize: 16, color: solo ? C.green : C.red }}>
             {solo ? "✓ May leave on their own" : "⚠ Must be released to an authorized adult"}
           </div>
         </div>
 
-        <div style={{ fontFamily: MONO, fontSize: 10, letterSpacing: 1, color: C.muted, textTransform: "uppercase", marginBottom: 4 }}>Authorized pickup (besides parent/guardian)</div>
-        <div style={{ fontFamily: BODY, fontSize: 15, color: C.ink, marginBottom: 14, lineHeight: 1.4 }}>
-          {child.pickups?.trim() ? child.pickups : "— none listed besides parent/guardian —"}
+        <div style={{ fontFamily: MONO, fontSize: 10, letterSpacing: 1, color: C.muted, textTransform: "uppercase", marginBottom: 8 }}>
+          {solo ? "Released to (optional)" : "Released to"}
         </div>
 
-        {!solo && (
-          <label style={{ display: "flex", flexDirection: "column", gap: 5, marginBottom: 14 }}>
-            <span style={{ fontFamily: MONO, fontSize: 10, letterSpacing: 1, color: C.muted, textTransform: "uppercase" }}>Released to (optional)</span>
-            <input value={releasedTo} onChange={(e) => setReleasedTo(e.target.value)} placeholder="Who collected the child?" style={input} autoFocus />
-          </label>
+        {/* tap-to-select chips */}
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginBottom: 12 }}>
+          {childPeople.map((name, i) => (
+            <Chip key={"c" + i} label={name} active={!manual && selected === name} onClick={() => chooseChip(name)} />
+          ))}
+          {poolExtra.map((p) => (
+            <Chip key={p.id} label={p.rel ? `${p.name} · ${p.rel}` : p.name} active={!manual && selected === p.name} onClick={() => chooseChip(p.name)} />
+          ))}
+          <Chip label={manual ? "✎ Someone else" : "+ Someone else…"} active={manual} tone="muted" onClick={() => { setManual(true); setSelected(""); }} />
+        </div>
+
+        {childPeople.length === 0 && poolExtra.length === 0 && !manual && (
+          <div style={{ fontFamily: BODY, fontSize: 12.5, color: C.muted, marginTop: -4, marginBottom: 12 }}>
+            No saved pickup people yet — tap “Someone else” to enter a name.
+          </div>
+        )}
+
+        {/* manual entry */}
+        {manual && (
+          <div style={{ display: "grid", gap: 8, marginBottom: 12 }}>
+            <input value={typed} onChange={(e) => setTyped(e.target.value)} placeholder="Who collected the child?" style={input} autoFocus />
+            <input value={typedRel} onChange={(e) => setTypedRel(e.target.value)} placeholder="Relationship (optional) — e.g. aunt, volunteer" style={{ ...input, fontSize: 13 }} />
+            {typed.trim() && !onList(typed) && (
+              <label style={{ display: "flex", alignItems: "center", gap: 8, fontFamily: BODY, fontSize: 13, color: C.muted }}>
+                <input type="checkbox" checked={savePool} onChange={(e) => setSavePool(e.target.checked)} style={{ width: 16, height: 16, accentColor: C.pine }} />
+                Remember for next time (adds to pickup list)
+              </label>
+            )}
+          </div>
+        )}
+
+        {/* ad-hoc flag notice */}
+        {finalName && !onList(finalName) && (
+          <div style={{ fontFamily: BODY, fontSize: 12.5, fontWeight: 600, color: C.marigold, background: C.marigoldSoft, borderRadius: 8, padding: "7px 11px", marginBottom: 12 }}>
+            ⚠ “{finalName}” isn’t on the authorized list — this will be flagged in the record.
+          </div>
         )}
 
         <div style={{ display: "flex", gap: 10 }}>
-          <button onClick={() => onConfirm(releasedTo.trim())} style={{ ...btnPrimary, flex: 1, background: solo ? C.pine : C.red }}>
+          <button onClick={confirm} disabled={!solo && !finalName}
+            style={{ ...btnPrimary, flex: 1, background: solo ? C.pine : C.red, opacity: (!solo && !finalName) ? 0.5 : 1 }}>
             {solo ? "Confirm dismissed" : "Confirm hand-off"}
           </button>
           <button onClick={onClose} style={btnGhost}>Cancel</button>
