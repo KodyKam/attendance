@@ -47,6 +47,17 @@ const todayISO = () => new Date().toISOString().slice(0, 10);
 const nowTime = () => new Date().toLocaleTimeString("en-CA", { hour: "numeric", minute: "2-digit" });
 const prettyDate = (iso) => iso ? new Date(iso + "T00:00:00").toLocaleDateString("en-CA", { weekday: "short", day: "numeric", month: "short" }) : "";
 
+/* Authorized pickup people for a child, as structured entries [{ id, name, rel }].
+   Prefers the new child.people array; falls back to migrating the legacy
+   comma/newline "pickups" text so existing rosters keep working. */
+const peopleOf = (child) => {
+  if (Array.isArray(child.people)) return child.people;
+  return (child.pickups || "").split(/[,\n]/).map((s) => s.trim()).filter(Boolean)
+    .map((name) => ({ id: uid(), name, rel: "" }));
+};
+/* One-line label for CSV / summaries */
+const pickupLabel = (child) => peopleOf(child).map((p) => p.rel ? `${p.name} (${p.rel})` : p.name).join(", ");
+
 /* ================================================================== */
 /*  App                                                                */
 /* ================================================================== */
@@ -77,6 +88,7 @@ function App() {
   }, []);
 
   const saveSettings = useCallback((next) => { setSettings(next); store.set("settings", JSON.stringify(next)); }, []);
+  const savePool = useCallback((next) => { setPool(next); store.set("pool", JSON.stringify(next)); }, []);
   const addToPool = useCallback((name, rel) => {
     const clean = (name || "").trim(); if (!clean) return;
     setPool((prev) => {
@@ -113,7 +125,7 @@ function App() {
     children.forEach((c) => {
       const r = day[c.id] || {};
       const pickupType = r.out ? (r.releasedTo ? (r.adHoc ? "Ad-hoc (not on list)" : "Authorized") : "") : "";
-      rows.push([date, c.name, r.in ? "Yes" : "No", r.inTime || "", r.out ? "Yes" : "No", r.outTime || "", r.releasedTo || "", pickupType, c.solo ? "Yes" : "No", c.pickups || ""]);
+      rows.push([date, c.name, r.in ? "Yes" : "No", r.inTime || "", r.out ? "Yes" : "No", r.outTime || "", r.releasedTo || "", pickupType, c.solo ? "Yes" : "No", pickupLabel(c)]);
     });
     const csv = rows.map((row) => row.map((x) => `"${String(x ?? "").replace(/"/g, '""')}"`).join(",")).join("\r\n");
     const blob = new Blob(["\ufeff" + csv], { type: "text/csv;charset=utf-8;" });
@@ -149,8 +161,8 @@ function App() {
       </header>
 
       <nav style={tabBar}>
-        {[["today", "Today"], ["roster", "Children"]].map(([k, label]) => (
-          <button key={k} onClick={() => setTab(k)} style={{ ...tabBtn, color: tab === k ? C.pine : C.muted, borderBottom: tab === k ? `2px solid ${C.pine}` : "2px solid transparent", fontWeight: tab === k ? 700 : 500 }}>{label}{k === "roster" ? ` (${children.length})` : ""}</button>
+        {[["today", "Today"], ["roster", "Children"], ["pickups", "Pickups"]].map(([k, label]) => (
+          <button key={k} onClick={() => setTab(k)} style={{ ...tabBtn, color: tab === k ? C.pine : C.muted, borderBottom: tab === k ? `2px solid ${C.pine}` : "2px solid transparent", fontWeight: tab === k ? 700 : 500 }}>{label}{k === "roster" ? ` (${children.length})` : k === "pickups" ? ` (${pool.length})` : ""}</button>
         ))}
       </nav>
 
@@ -193,6 +205,10 @@ function App() {
 
         {tab === "roster" && (
           <Roster children={children} saveChildren={saveChildren} />
+        )}
+
+        {tab === "pickups" && (
+          <PickupPool pool={pool} savePool={savePool} />
         )}
       </main>
 
@@ -316,7 +332,7 @@ function TodayRow({ child, rec, first, onIn, onUndoIn, onDismiss, onUndoOut }) {
         <div style={{ padding: "0 14px 12px 14px", background: "#FBFCFE" }}>
           <div style={{ background: C.surface, border: `1px solid ${C.line}`, borderRadius: 10, padding: 12 }}>
             <div style={{ fontFamily: MONO, fontSize: 10, letterSpacing: 1, color: C.muted, textTransform: "uppercase", marginBottom: 4 }}>Authorized pickup (besides parent/guardian)</div>
-            <div style={{ fontFamily: BODY, fontSize: 14, color: C.ink }}>{child.pickups?.trim() ? child.pickups : "— none listed —"}</div>
+            <div style={{ fontFamily: BODY, fontSize: 14, color: C.ink }}>{peopleOf(child).length ? pickupLabel(child) : "— none listed —"}</div>
             <div style={{ marginTop: 8, fontFamily: BODY, fontSize: 13, fontWeight: 600, color: solo ? C.green : C.red }}>
               {solo ? "✓ Permitted to leave the program unaccompanied" : "✗ Not permitted to leave alone — hand off to an authorized adult"}
             </div>
@@ -332,8 +348,8 @@ function TodayRow({ child, rec, first, onIn, onUndoIn, onDismiss, onUndoOut }) {
 /* ================================================================== */
 function DismissModal({ child, pool, onClose, onConfirm, onAddToPool }) {
   const solo = child.solo;
-  // The child's own authorized people, parsed from their saved "pickups" text (comma / newline separated).
-  const childPeople = (child.pickups || "").split(/[,\n]/).map((s) => s.trim()).filter(Boolean);
+  // The child's own authorized people, as structured entries [{ name, rel }].
+  const childPeople = peopleOf(child);
 
   const [selected, setSelected] = useState("");   // name chosen (chip or typed)
   const [manual, setManual] = useState(false);    // "someone else" text box open
@@ -344,7 +360,7 @@ function DismissModal({ child, pool, onClose, onConfirm, onAddToPool }) {
   // Is the chosen name on any authorized list (child's own or the shared pool)?
   const onList = (name) => {
     const n = name.trim().toLowerCase();
-    return childPeople.some((p) => p.toLowerCase() === n) || (pool || []).some((p) => p.name.toLowerCase() === n);
+    return childPeople.some((p) => p.name.toLowerCase() === n) || (pool || []).some((p) => p.name.toLowerCase() === n);
   };
 
   const chooseChip = (name) => { setSelected(name); setManual(false); setTyped(""); };
@@ -359,7 +375,7 @@ function DismissModal({ child, pool, onClose, onConfirm, onAddToPool }) {
   };
 
   // shared-pool chips not already shown in the child's own list
-  const poolExtra = (pool || []).filter((p) => !childPeople.some((cp) => cp.toLowerCase() === p.name.toLowerCase()));
+  const poolExtra = (pool || []).filter((p) => !childPeople.some((cp) => cp.name.toLowerCase() === p.name.toLowerCase()));
 
   const Chip = ({ label, active, onClick, tone }) => (
     <button onClick={onClick} style={{
@@ -390,8 +406,8 @@ function DismissModal({ child, pool, onClose, onConfirm, onAddToPool }) {
 
         {/* tap-to-select chips */}
         <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginBottom: 12 }}>
-          {childPeople.map((name, i) => (
-            <Chip key={"c" + i} label={name} active={!manual && selected === name} onClick={() => chooseChip(name)} />
+          {childPeople.map((p, i) => (
+            <Chip key={"c" + i} label={p.rel ? `${p.name} · ${p.rel}` : p.name} active={!manual && selected === p.name} onClick={() => chooseChip(p.name)} />
           ))}
           {poolExtra.map((p) => (
             <Chip key={p.id} label={p.rel ? `${p.name} · ${p.rel}` : p.name} active={!manual && selected === p.name} onClick={() => chooseChip(p.name)} />
@@ -463,7 +479,12 @@ function Roster({ children, saveChildren }) {
     setPaste(""); setShowImport(false);
   };
 
-  const addOne = () => { if (!nm.trim()) return; saveChildren([...children, { id: uid(), name: nm.trim(), pickups: pk.trim(), solo: so }]); setNm(""); setPk(""); setSo(false); };
+  const addOne = () => {
+    if (!nm.trim()) return;
+    const people = pk.split(/[,\n]/).map((s) => s.trim()).filter(Boolean).map((name) => ({ id: uid(), name, rel: "" }));
+    saveChildren([...children, { id: uid(), name: nm.trim(), people, solo: so }]);
+    setNm(""); setPk(""); setSo(false);
+  };
   const update = (id, patch) => saveChildren(children.map((c) => (c.id === id ? { ...c, ...patch } : c)));
   const remove = (id) => { if (confirm("Remove this child from the roster?")) saveChildren(children.filter((c) => c.id !== id)); };
 
@@ -511,11 +532,90 @@ function Roster({ children, saveChildren }) {
                 <input value={c.name} onChange={(e) => update(c.id, { name: e.target.value })} style={{ ...input, fontWeight: 600, flex: 1, border: "1px solid transparent" }} />
                 <button onClick={() => remove(c.id)} style={{ ...iconBtn, color: C.red }}>🗑</button>
               </div>
-              <input value={c.pickups} onChange={(e) => update(c.id, { pickups: e.target.value })} placeholder="Authorized pickup persons" style={{ ...input, fontSize: 13, marginTop: 6 }} />
-              <label style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 8, fontFamily: BODY, fontSize: 13, color: c.solo ? C.green : C.red, fontWeight: 600 }}>
+              <PeopleEditor people={peopleOf(c)} onChange={(people) => update(c.id, { people, pickups: undefined })} />
+              <label style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 10, fontFamily: BODY, fontSize: 13, color: c.solo ? C.green : C.red, fontWeight: 600 }}>
                 <input type="checkbox" checked={c.solo} onChange={(e) => update(c.id, { solo: e.target.checked })} style={{ width: 17, height: 17, accentColor: C.green }} />
                 {c.solo ? "May leave unaccompanied" : "Pickup only — not permitted to leave alone"}
               </label>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ================================================================== */
+/*  PeopleEditor — a child's authorized pickups as name + relationship */
+/* ================================================================== */
+function PeopleEditor({ people, onChange }) {
+  const set = (id, patch) => onChange(people.map((p) => (p.id === id ? { ...p, ...patch } : p)));
+  const add = () => onChange([...people, { id: uid(), name: "", rel: "" }]);
+  const del = (id) => onChange(people.filter((p) => p.id !== id));
+
+  return (
+    <div style={{ marginTop: 8 }}>
+      <div style={{ fontFamily: MONO, fontSize: 9.5, letterSpacing: 1, color: C.muted, textTransform: "uppercase", marginBottom: 6 }}>
+        Authorized pickups (besides parent/guardian)
+      </div>
+      {people.length === 0 && (
+        <div style={{ fontFamily: BODY, fontSize: 12.5, color: C.muted, marginBottom: 6 }}>None yet.</div>
+      )}
+      {people.map((p) => (
+        <div key={p.id} style={{ display: "flex", gap: 6, marginBottom: 6, alignItems: "center" }}>
+          <input value={p.name} onChange={(e) => set(p.id, { name: e.target.value })} placeholder="Name" style={{ ...input, fontSize: 13, flex: 2 }} />
+          <input value={p.rel} onChange={(e) => set(p.id, { rel: e.target.value })} placeholder="Relationship" style={{ ...input, fontSize: 13, flex: 1.3 }} />
+          <button onClick={() => del(p.id)} style={{ ...iconBtn, color: C.red, fontSize: 13 }} title="Remove">✕</button>
+        </div>
+      ))}
+      <button onClick={add} style={{ ...btnGhost, padding: "6px 12px", fontSize: 13, marginTop: 2 }}>+ Add pickup person</button>
+    </div>
+  );
+}
+
+/* ================================================================== */
+/*  PickupPool tab — shared volunteers/staff usable for any child      */
+/* ================================================================== */
+function PickupPool({ pool, savePool }) {
+  const [nm, setNm] = useState(""); const [rel, setRel] = useState("");
+  const add = () => {
+    const name = nm.trim(); if (!name) return;
+    if (pool.some((p) => p.name.toLowerCase() === name.toLowerCase())) { setNm(""); setRel(""); return; }
+    savePool([...pool, { id: uid(), name, rel: rel.trim() }]);
+    setNm(""); setRel("");
+  };
+  const set = (id, patch) => savePool(pool.map((p) => (p.id === id ? { ...p, ...patch } : p)));
+  const del = (id) => { if (confirm("Remove this person from the shared pickup pool?")) savePool(pool.filter((p) => p.id !== id)); };
+
+  return (
+    <div>
+      <div style={{ ...card, marginBottom: 14 }}>
+        <div style={{ fontFamily: DISPLAY, fontWeight: 700, fontSize: 16, color: C.ink }}>Shared pickup pool</div>
+        <p style={{ fontFamily: BODY, fontSize: 13, color: C.muted, margin: "6px 0 0", lineHeight: 1.5 }}>
+          People here — volunteers, staff, drivers — appear as a one-tap option when dismissing <b>any</b> child, on top of each child’s own authorized list. New names you enter at dismissal and choose to remember land here too.
+        </p>
+      </div>
+
+      <div style={{ ...card, marginBottom: 14 }}>
+        <div style={{ fontFamily: MONO, fontSize: 10, letterSpacing: 1, color: C.muted, textTransform: "uppercase", marginBottom: 8 }}>Add to pool</div>
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+          <input value={nm} onChange={(e) => setNm(e.target.value)} placeholder="Name" style={{ ...input, flex: 2, minWidth: 140 }} onKeyDown={(e) => e.key === "Enter" && add()} />
+          <input value={rel} onChange={(e) => setRel(e.target.value)} placeholder="Role / relationship" style={{ ...input, flex: 1.3, minWidth: 120 }} onKeyDown={(e) => e.key === "Enter" && add()} />
+          <button onClick={add} style={btnPrimary}>Add</button>
+        </div>
+      </div>
+
+      {pool.length === 0 ? (
+        <div style={{ ...card, textAlign: "center", padding: 30, fontFamily: BODY, color: C.muted, fontSize: 14 }}>
+          No shared pickup people yet.
+        </div>
+      ) : (
+        <div style={{ ...card, padding: 0, overflow: "hidden" }}>
+          {pool.map((p, i) => (
+            <div key={p.id} style={{ display: "flex", gap: 8, alignItems: "center", padding: "10px 14px", borderTop: i ? `1px solid ${C.lineSoft}` : "none" }}>
+              <input value={p.name} onChange={(e) => set(p.id, { name: e.target.value })} style={{ ...input, fontWeight: 600, flex: 2, border: "1px solid transparent" }} />
+              <input value={p.rel} onChange={(e) => set(p.id, { rel: e.target.value })} placeholder="role" style={{ ...input, fontSize: 13, flex: 1.3 }} />
+              <button onClick={() => del(p.id)} style={{ ...iconBtn, color: C.red }}>🗑</button>
             </div>
           ))}
         </div>
