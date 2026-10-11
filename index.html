@@ -377,6 +377,10 @@ function DismissModal({ child, pool, onClose, onConfirm, onAddToPool }) {
   // shared-pool chips not already shown in the child's own list
   const poolExtra = (pool || []).filter((p) => !childPeople.some((cp) => cp.name.toLowerCase() === p.name.toLowerCase()));
 
+  const GroupLabel = ({ children }) => (
+    <div style={{ fontFamily: BODY, fontSize: 11.5, fontWeight: 700, color: C.muted, marginBottom: 6 }}>{children}</div>
+  );
+
   const Chip = ({ label, active, onClick, tone }) => (
     <button onClick={onClick} style={{
       fontFamily: BODY, fontSize: 14, fontWeight: 600, cursor: "pointer",
@@ -400,26 +404,44 @@ function DismissModal({ child, pool, onClose, onConfirm, onAddToPool }) {
           </div>
         </div>
 
-        <div style={{ fontFamily: MONO, fontSize: 10, letterSpacing: 1, color: C.muted, textTransform: "uppercase", marginBottom: 8 }}>
+        <div style={{ fontFamily: MONO, fontSize: 10, letterSpacing: 1, color: C.muted, textTransform: "uppercase", marginBottom: 10 }}>
           {solo ? "Released to (optional)" : "Released to"}
         </div>
 
-        {/* tap-to-select chips */}
-        <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginBottom: 12 }}>
-          {childPeople.map((p, i) => (
-            <Chip key={"c" + i} label={p.rel ? `${p.name} · ${p.rel}` : p.name} active={!manual && selected === p.name} onClick={() => chooseChip(p.name)} />
-          ))}
-          {poolExtra.map((p) => (
-            <Chip key={p.id} label={p.rel ? `${p.name} · ${p.rel}` : p.name} active={!manual && selected === p.name} onClick={() => chooseChip(p.name)} />
-          ))}
-          <Chip label={manual ? "✎ Someone else" : "+ Someone else…"} active={manual} tone="muted" onClick={() => { setManual(true); setSelected(""); }} />
-        </div>
+        {/* This child's own authorized list */}
+        {childPeople.length > 0 && (
+          <div style={{ marginBottom: 12 }}>
+            <GroupLabel>{child.name.split(" ")[0]}’s authorized list</GroupLabel>
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+              {childPeople.map((p, i) => (
+                <Chip key={"c" + i} label={p.rel ? `${p.name} · ${p.rel}` : p.name} active={!manual && selected === p.name} onClick={() => chooseChip(p.name)} />
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* Shared pool (volunteers/staff) */}
+        {poolExtra.length > 0 && (
+          <div style={{ marginBottom: 12 }}>
+            <GroupLabel>Shared pickup pool</GroupLabel>
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+              {poolExtra.map((p) => (
+                <Chip key={p.id} label={p.rel ? `${p.name} · ${p.rel}` : p.name} active={!manual && selected === p.name} onClick={() => chooseChip(p.name)} />
+              ))}
+            </div>
+          </div>
+        )}
 
         {childPeople.length === 0 && poolExtra.length === 0 && !manual && (
-          <div style={{ fontFamily: BODY, fontSize: 12.5, color: C.muted, marginTop: -4, marginBottom: 12 }}>
+          <div style={{ fontFamily: BODY, fontSize: 12.5, color: C.muted, marginBottom: 12 }}>
             No saved pickup people yet — tap “Someone else” to enter a name.
           </div>
         )}
+
+        {/* Someone else — ad-hoc */}
+        <div style={{ marginBottom: 12 }}>
+          <Chip label={manual ? "✎ Someone else" : "+ Someone else…"} active={manual} tone="muted" onClick={() => { setManual(true); setSelected(""); }} />
+        </div>
 
         {/* manual entry */}
         {manual && (
