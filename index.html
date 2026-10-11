@@ -133,6 +133,42 @@ function App() {
     const a = document.createElement("a"); a.href = url; a.download = "attendance_" + date + ".csv"; a.click(); URL.revokeObjectURL(url);
   };
 
+  /* ---- Full backup / restore (all data as one JSON file) ---- */
+  const exportBackup = () => {
+    const backup = {
+      app: "Attendance", kind: "attendance-backup", version: 1,
+      exportedAt: new Date().toISOString(),
+      data: { children, attendance, pool, settings },
+    };
+    const blob = new Blob([JSON.stringify(backup, null, 2)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url; a.download = "attendance-backup-" + todayISO() + ".json"; a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  const importBackup = (file) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      let parsed;
+      try { parsed = JSON.parse(reader.result); } catch (e) { alert("That file isn't a valid backup (couldn't read it)."); return; }
+      const d = parsed && parsed.data ? parsed.data : null;
+      if (!d || !Array.isArray(d.children)) { alert("That doesn't look like an Attendance backup file."); return; }
+      const n = d.children.length;
+      if (!confirm("Restore this backup?\n\nThis REPLACES all current data on this device with the backup (" + n + " child" + (n === 1 ? "" : "ren") + "). This can't be undone — export a backup of the current data first if you're unsure.")) return;
+      const nextChildren = d.children || [];
+      const nextAtt = d.attendance || {};
+      const nextPool = Array.isArray(d.pool) ? d.pool : [];
+      const nextSettings = { orgName: "", logo: "", ...(d.settings || {}) };
+      setChildren(nextChildren); store.set("children", JSON.stringify(nextChildren));
+      setAttendance(nextAtt); store.set("attendance", JSON.stringify(nextAtt));
+      setPool(nextPool); store.set("pool", JSON.stringify(nextPool));
+      setSettings(nextSettings); store.set("settings", JSON.stringify(nextSettings));
+      alert("Backup restored — " + nextChildren.length + " children loaded.");
+    };
+    reader.readAsText(file);
+  };
+
   if (loading) return <div style={{ ...page, display: "flex", alignItems: "center", justifyContent: "center", minHeight: 300 }}><span style={{ fontFamily: BODY, color: C.muted }}>Loading…</span></div>;
 
   const dayRecs = attendance[date] || {};
@@ -219,7 +255,8 @@ function App() {
       )}
 
       {showSettings && (
-        <SettingsModal settings={settings} onSave={saveSettings} onClose={() => setShowSettings(false)} />
+        <SettingsModal settings={settings} onSave={saveSettings} onClose={() => setShowSettings(false)}
+          onExportBackup={exportBackup} onImportBackup={importBackup} childCount={children.length} />
       )}
     </div>
   );
@@ -245,7 +282,7 @@ function Logo({ src }) {
 /* ================================================================== */
 /*  Settings modal — org name + logo (the per-org slot)               */
 /* ================================================================== */
-function SettingsModal({ settings, onSave, onClose }) {
+function SettingsModal({ settings, onSave, onClose, onExportBackup, onImportBackup, childCount }) {
   const [orgName, setOrgName] = useState(settings.orgName || "");
   const [logo, setLogo] = useState(settings.logo || "");
 
@@ -257,6 +294,12 @@ function SettingsModal({ settings, onSave, onClose }) {
     const reader = new FileReader();
     reader.onload = () => setLogo(reader.result);
     reader.readAsDataURL(file);
+  };
+
+  const onPickBackup = (e) => {
+    const file = e.target.files && e.target.files[0];
+    e.target.value = ""; // allow re-selecting the same file later
+    if (file) onImportBackup(file);
   };
 
   const save = () => { onSave({ ...settings, orgName: orgName.trim(), logo }); onClose(); };
@@ -283,9 +326,27 @@ function SettingsModal({ settings, onSave, onClose }) {
           <input value={orgName} onChange={(e) => setOrgName(e.target.value)} placeholder="e.g. From the Ground Up" style={input} autoFocus />
         </label>
 
-        <div style={{ display: "flex", gap: 10 }}>
+        <div style={{ display: "flex", gap: 10, marginBottom: 20 }}>
           <button onClick={save} style={{ ...btnPrimary, flex: 1 }}>Save</button>
           <button onClick={onClose} style={btnGhost}>Cancel</button>
+        </div>
+
+        {/* Backup & restore */}
+        <div style={{ borderTop: `1px solid ${C.line}`, paddingTop: 16 }}>
+          <div style={{ fontFamily: MONO, fontSize: 10, letterSpacing: 1.5, color: C.muted, textTransform: "uppercase" }}>Backup &amp; restore</div>
+          <p style={{ fontFamily: BODY, fontSize: 12.5, color: C.muted, margin: "6px 0 10px", lineHeight: 1.5 }}>
+            Your data lives only in this browser. Export a backup file regularly — and before switching devices or clearing your browser — so nothing is lost. Restoring replaces all data on this device.
+          </p>
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+            <button onClick={onExportBackup} style={btnGhost}>↓ Export backup</button>
+            <label style={{ ...btnGhost, cursor: "pointer", display: "inline-block" }}>
+              ↑ Restore from backup
+              <input type="file" accept="application/json,.json" onChange={onPickBackup} style={{ display: "none" }} />
+            </label>
+          </div>
+          <div style={{ fontFamily: BODY, fontSize: 11.5, color: C.muted, marginTop: 8 }}>
+            Currently storing {childCount} {childCount === 1 ? "child" : "children"} on this device.
+          </div>
         </div>
       </div>
     </div>
